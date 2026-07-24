@@ -16,6 +16,33 @@
 						<button type="button" class="btn btn-warning" id="execute"><i class="fa fa-trash"></i> Run Archiver</button>
 						<button type="button" class="btn btn-default" id="test"><i class="fa fa-check-circle-o"></i>Test Run</button>
 					</div>
+
+					<div class="card mt-3">
+						<div class="card-header fw-bold">Last run result</div>
+						<div class="card-body">
+							<p id="last-run-empty" class="text-muted mb-0">The archiver has not run yet.</p>
+							<dl id="last-run-details" class="row mb-0 d-none">
+								<dt class="col-sm-4">Status</dt>
+								<dd class="col-sm-8" id="last-run-status"></dd>
+								<dt class="col-sm-4">Started</dt>
+								<dd class="col-sm-8" id="last-run-started"></dd>
+								<dt class="col-sm-4">Finished</dt>
+								<dd class="col-sm-8" id="last-run-finished"></dd>
+								<dt class="col-sm-4">Action</dt>
+								<dd class="col-sm-8" id="last-run-action"></dd>
+								<dt class="col-sm-4">Topics scanned</dt>
+								<dd class="col-sm-8" id="last-run-scanned"></dd>
+								<dt class="col-sm-4">Actions attempted</dt>
+								<dd class="col-sm-8" id="last-run-attempted"></dd>
+								<dt class="col-sm-4">Succeeded</dt>
+								<dd class="col-sm-8" id="last-run-succeeded"></dd>
+								<dt class="col-sm-4">Already deleted (skipped)</dt>
+								<dd class="col-sm-8" id="last-run-already-deleted"></dd>
+								<dt class="col-sm-4">Error</dt>
+								<dd class="col-sm-8 text-break" id="last-run-error"></dd>
+							</dl>
+						</div>
+					</div>
 				</div>
 
 				<div class="mb-4">

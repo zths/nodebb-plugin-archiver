@@ -12,6 +12,23 @@ const categories = require.main.require('./src/categories');
 
 const Archiver = module.exports;
 
+function isTopicAlreadyDeleted(err) {
+	return err && (
+		err.code === 'topic-already-deleted' ||
+		String(err.message).includes('topic-already-deleted')
+	);
+}
+
+async function saveLastRun(result) {
+	try {
+		await meta.settings.set('archiver', {
+			lastRun: JSON.stringify(result),
+		});
+	} catch (err) {
+		winston.error(`[plugin.archiver] Unable to save last run result: ${err.message}`);
+	}
+}
+
 const archiveCron = new cronJob('0 0 0 * * *', (() => {
 	winston.verbose('[plugin.archiver] Checking for expired topics');
 	Archiver.execute();
@@ -106,63 +123,101 @@ Archiver.findTids = async () => {
 
 Archiver.execute = async () => {
 	const now = Date.now();
-	let { type, cutoff, action, uid } = await meta.settings.get('archiver');
-	type = type || 'activity';
-	cutoff = Date.now() - (60000 * 60 * 24 * parseInt(cutoff, 10));
-	action = action || 'lock';
-	uid = uid || 1;
+	const result = {
+		status: 'running',
+		startedAt: new Date(now).toISOString(),
+		finishedAt: null,
+		action: null,
+		scanned: 0,
+		attempted: 0,
+		succeeded: 0,
+		alreadyDeleted: 0,
+		error: null,
+	};
 
-	const { excludePins } = await meta.settings.get('archiver');
-	let tids = await Archiver.findTids();
+	try {
+		let { type, cutoff, action, uid, excludePins } = await meta.settings.get('archiver');
+		type = type || 'activity';
+		cutoff = Date.now() - (60000 * 60 * 24 * parseInt(cutoff, 10));
+		action = action || 'lock';
+		uid = uid || 1;
+		result.action = action;
 
-	// Filter out topics that do not exist (leftover references in topic zsets?)
-	const exists = await topics.exists(tids);
-	tids = tids.filter((tid, idx) => exists[idx]);
+		let tids = await Archiver.findTids();
 
-	async.eachLimit(tids, 5, (tid, next) => {
-		topics.getTopicData(tid, (err, { tid, timestamp, lastposttime, pinned }) => {
-			if (err) {
-				return next(err);
-			}
+		// Filter out topics that do not exist (leftover references in topic zsets?)
+		const exists = await topics.exists(tids);
+		tids = tids.filter((tid, idx) => exists[idx]);
+		result.scanned = tids.length;
 
-			if (excludePins === 'on' && !!pinned) {
-				return next();
-			}
-
-			switch (type) {
-				case 'hard':
-					if (timestamp <= cutoff) {
-						winston.info(`[plugin.archiver] Archiving (${action}) topic ${tid}`);
-						return topics.tools[action](tid, uid, next);
+		await new Promise((resolve, reject) => {
+			async.eachLimit(tids, 5, (tid, next) => {
+				topics.getTopicData(tid, (err, topicData) => {
+					if (err) {
+						return next(err);
 					}
-					break;
 
-				case 'activity':
-					if (lastposttime <= cutoff) {
-						winston.info(`[plugin.archiver] Archiving (${action}) topic ${tid}`);
-						return topics.tools[action](tid, uid, next);
+					const { timestamp, lastposttime, pinned } = topicData;
+					if (excludePins === 'on' && !!pinned) {
+						return next();
 					}
-					break;
 
-				default:
-					return next();
-			}
+					const shouldArchive = (type === 'hard' && timestamp <= cutoff) ||
+						(type === 'activity' && lastposttime <= cutoff);
+					if (!shouldArchive) {
+						return process.nextTick(next);
+					}
 
-			process.nextTick(next);
+					result.attempted += 1;
+					winston.info(`[plugin.archiver] Archiving (${action}) topic ${tid}`);
+					return topics.tools[action](tid, uid, (actionErr) => {
+						if (isTopicAlreadyDeleted(actionErr)) {
+							result.alreadyDeleted += 1;
+							winston.warn(`[plugin.archiver] Topic ${tid} is already deleted; skipping.`);
+							return next();
+						}
+						if (actionErr) {
+							return next(actionErr);
+						}
+
+						result.succeeded += 1;
+						return next();
+					});
+				});
+			}, err => (err ? reject(err) : resolve()));
 		});
-	}, (err) => {
-		if (err) {
-			return winston.error(`[plugin.archiver] Unable to archive topics: ${err.message}`);
-		}
 
 		winston.info('[plugin.archiver] Finished archiving topics.');
 
 		// Update lowerBound
 		winston.info(`[plugin.archiver] Updating lower bound value to: ${now}`);
-		meta.settings.set('archiver', {
+		await meta.settings.set('archiver', {
 			lowerBound: now,
 		});
-	});
+		result.status = 'success';
+	} catch (err) {
+		result.status = 'failed';
+		result.error = err.message;
+		winston.error(`[plugin.archiver] Unable to archive topics: ${err.message}`);
+	}
+
+	result.finishedAt = new Date().toISOString();
+	await saveLastRun(result);
+	return result;
+};
+
+Archiver.getLastRun = async () => {
+	const { lastRun } = await meta.settings.get('archiver');
+	if (!lastRun) {
+		return null;
+	}
+
+	try {
+		return JSON.parse(lastRun);
+	} catch (err) {
+		winston.warn(`[plugin.archiver] Invalid last run result: ${err.message}`);
+		return null;
+	}
 };
 
 Archiver.admin = {
@@ -182,4 +237,5 @@ module.exports = {
 	admin: Archiver.admin,
 	execute: Archiver.execute,
 	findTids: Archiver.findTids,
+	getLastRun: Archiver.getLastRun,
 };
