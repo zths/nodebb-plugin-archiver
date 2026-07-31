@@ -94,10 +94,18 @@ function stopCronJobs() {
 	}
 }
 
-Archiver.findTids = async () => {
+Archiver.findTids = async (cutoffOverride) => {
 	let { cutoff, cids, lowerBound } = await meta.settings.get('archiver');
-	cutoff = Date.now() - (60000 * 60 * 24 * parseInt(cutoff || 7, 10));
-	lowerBound = lowerBound || 0;
+	cutoff = Number.isFinite(cutoffOverride) ?
+		cutoffOverride :
+		Date.now() - (60000 * 60 * 24 * parseInt(cutoff || 7, 10));
+	lowerBound = parseInt(lowerBound || 0, 10);
+	if (lowerBound > cutoff) {
+		winston.warn(
+			`[plugin.archiver] Invalid lower bound ${lowerBound}; resetting it to 0 because cutoff is ${cutoff}.`,
+		);
+		lowerBound = 0;
+	}
 
 	try {
 		if (typeof cids === 'string') {
@@ -117,7 +125,7 @@ Archiver.findTids = async () => {
 
 	winston.verbose(`[plugins/archiver] Proceeding with sets: ${sets.toString()}`);
 	const results = await Promise.all(
-		sets.map(async set => await db.getSortedSetRevRangeByScore(set, 0, -1, cutoff, parseInt(lowerBound, 10)))
+		sets.map(async set => await db.getSortedSetRevRangeByScore(set, 0, -1, cutoff, lowerBound))
 	);
 
 	return results
@@ -147,7 +155,7 @@ Archiver.execute = async () => {
 		uid = uid || 1;
 		result.action = action;
 
-		let tids = await Archiver.findTids();
+		let tids = await Archiver.findTids(cutoff);
 
 		// Filter out topics that do not exist (leftover references in topic zsets?)
 		const exists = await topics.exists(tids);
@@ -194,9 +202,9 @@ Archiver.execute = async () => {
 		winston.info('[plugin.archiver] Finished archiving topics.');
 
 		// Update lowerBound
-		winston.info(`[plugin.archiver] Updating lower bound value to: ${now}`);
+		winston.info(`[plugin.archiver] Updating lower bound value to cutoff: ${cutoff}`);
 		await meta.settings.set('archiver', {
-			lowerBound: now,
+			lowerBound: cutoff,
 		});
 		result.status = 'success';
 	} catch (err) {
