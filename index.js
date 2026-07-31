@@ -68,6 +68,9 @@ Archiver.start = async (data) => {
 };
 
 function onSettingsSave(data) {
+	if (!Object.prototype.hasOwnProperty.call(data, 'active')) {
+		return;
+	}
 	if (nconf.get('runJobs')) {
 		if (data.active === 'on') {
 			reStartCronJobs();
@@ -81,6 +84,7 @@ function reStartCronJobs() {
 	if (nconf.get('runJobs')) {
 		stopCronJobs();
 		archiveCron.start();
+		winston.info(`[plugin.archiver] Scheduler started; next run: ${archiveCron.nextDate().toISOString()}`);
 	}
 }
 
